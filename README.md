@@ -7,4 +7,5 @@ _`log2d` with added UDP handler_
 to a remote logger to provide a simple centralised logging system.
 
 The UDP handler produces a log message as a `logging.logRecord` dict and uses JSON rather than pickle
-to encode the UDP packet.
+to encode the dict into a UDP packet and then transmits it to the remote listener.
+The listener can be anywhere and 
