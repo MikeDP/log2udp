@@ -1,5 +1,5 @@
 # **log2udp**
-[UDPglyph](assets/UDPglyph.png)
+![UDPglyph](assets/UDPglyph.png)
 _`log2d` with added UDP handler_
 
 [`log2d`](https://github.com/PFython/log2d) is a wrapper around Python `logging` that makes it trivially simple, sane and logical to implement Python `logging` without needing to understand it's complexity.
