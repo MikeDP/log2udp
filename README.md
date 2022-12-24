@@ -1,5 +1,7 @@
 # **log2udp**
-![UDPglyph](assets/UDPglyph.png)
+<p align="center">
+    <img src="assets/UDPglyph.png">
+</p>
 
 _`log2d` with added UDP handler_
 
