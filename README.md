@@ -1,4 +1,4 @@
-# log2udp
+# **log2udp**
 _`log2d` with added UDP handler_
 
 `log2d` is a wrapper around Python `logging` that makes it sane, simple and logical to use.
