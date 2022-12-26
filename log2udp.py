@@ -20,7 +20,8 @@ from log2d import Log, logging
 
 # ################################# GLOBALS #####################
 __VER__ = "v0.1 alpha"
-
+_ignore_list = ['args', 'pathname', 'exc_info', 'exc_text', 'stack_info', 'lineno',
+    'filename', 'msecs', 'relativeCreated', 'thread', 'threadName', 'processName', 'process']
 # ################################# CLASSES #####################
 
 class LogUDP(Log):
@@ -125,7 +126,7 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
         msg['msg'] = msg.get("msg", record.getMessage())
         """
         # pop other crap we don't need
-        for item in _ignoreList:
+        for item in _ignore_list:
             msg.pop(item, None)
         """
         # Now return preceed by 4 byte length
