@@ -11,7 +11,7 @@
 
 The UDP handler produces a log message as a `logging.logRecord` dict, uses JSON rather than pickle to encode the dict into a UDP packet and then transmits it to the remote listener. The listener can be anywhere on your network and can be setup as a _broadcast_ reciever.
 
-### **UDP - Universal Datagram Protocol**
+### **UDP - User Datagram Protocol**
 Unlike TCP, UDP is not connection-based - it's _“connectionless”_ - no connection is established before communication occurs. It is commonly referred to as the “fire-and-forget” protocol because it is not concerned about whether or not anyone actually receives the data transmitted. It is lightweight and faster than TCP and is commonly used for streaming.
 
 
