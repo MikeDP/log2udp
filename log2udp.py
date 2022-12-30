@@ -76,7 +76,7 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
     """
     Handler class which writes logging records, in json format, to
     a UDP socket.  The logRecord's dictionary (__dict__), is used
-    which makes simple to decode at the recieving end - just use json.dumps().
+    which makes simple to decode at the receiving end - just use json.dumps().
     The json packet is preceeded by a 4 byte length int.
     """
 
