@@ -81,7 +81,8 @@ def udp_logit(record: dict, address: tuple):
         # and send to log
         logger.handle(log_record)
         if record['levelno'] >= 50:   # This is critical or above
-            alert_record = f"{record['hostapp']} - {record['record']}" if 'hostapp' in record.keys() else record['record']
+            alert_record = f"{record['hostapp']} - {log_record}" if 'hostapp' in record.keys() else log_record
+            print(alert_record)
             email_alert(alert_record)
         ...
     elif _command == "FIND":
