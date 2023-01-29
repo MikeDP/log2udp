@@ -2,6 +2,10 @@
 
 """
 This applet is a bare minimum framework example of a UDP listener.
+
+UPDATE PENDING FOR USE OF SHA256 DIGEST ETC.
+FOR USE WITH V0.2 OF LOG2UDP
+
 """
 import json
 import logging
