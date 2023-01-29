@@ -26,15 +26,15 @@ For general LogUPD usage, see the examples provided for [log2d](https://github.c
 # Instantiate a remote log on a specific machine with local stdout echo and send a log message
 remote_log = LogUDP("myRemoteLog", udp=("192.168.1.250", 6666), to_stdout=True, salt="MySecret")
 remote_log.myRemoteLog.info("Info message 1")  # Goes to remote log and stdout
-remote_log("Info message 2", "info")           # Also goes to remote log and stdout
+remote_log("Info message 2", level="info")           # Also goes to remote log and stdout
 ``` 
 ```
 # Instantiate a local and remote log and send a message
 two_logs = LogUDP("mirrorLog", path="~/.logs", udp=("<broadcast>", 5005), to_stdout=False, salt="MySecret")
 two_logs.mirrorlog.warning("Warning message 1")   # Goes to local and remote logs
-two_logs("Warning message 2", "warning")          # Also goes to both logs
+two_logs("Warning message 2", level="warning")          # Also goes to both logs
 ```
 ```
 # Send log message with class function
-LogUDP("remotelog", udp=("<broadcast>", 6666), salt="MySecret")("Critical message!", "critical")
+LogUDP("remotelog", udp=("<broadcast>", 6666), salt="MySecret")("Critical message!", level="critical")
 ```
