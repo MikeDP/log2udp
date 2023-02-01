@@ -160,21 +160,23 @@ class LogUDP(Log):
 
     @ClassOrMethod
     def find(self, text: str="", path=None, date=None, deltadays: int=-7, level: str='NOTSET',
-                ignorecase: bool=True):
+                ignorecase: bool=True, remote=True):
         """ Search log for:
-               text:        text to seach for. Default '' means return everything
+               text:        Text to seach for. Default '' means return everything
                path:        FULL 'path/to/another/log.log' to search. Default=None, search this log
                date:        Date(time) object/str anchor for search. Default None = NOW
-               deltadays:   number of days prior to (-ve) or after date. Default 1 week prior
-               level:       log level below which results are ignored. Default 'NOTSET'
-               ignorecase:  set case insensitivity. Default True
-            Returns [[local find],[Remote find]] where r/l find is [MSG,[...]], [error msg.] or []
+               deltadays:   Number of days prior to (-ve) or after date. Default 1 week prior
+               level:       Log level below which results are ignored. Default 'NOTSET'
+               ignorecase:  Set case insensitivity. Default True
+               remote:      Perform remote search over UDP. Default True
+            Returns [r/l find] where r/l find is [MSG,[...]], [error msg.] or []
         """
         global remote_result
         remote_thread = None
-        if self.to_udp:
+        if self.to_udp and remote:
             # Construct command dict
             command = {"command": "FIND"}
+            command['deflog'] = self.name
             command["text"] = text
             command["name"] = path
             command["date"] = date
@@ -185,19 +187,16 @@ class LogUDP(Log):
             # self.remote_find(command_json)
             remote_thread = threading.Thread(target=self.remote_find, args=(command_json,))
             remote_thread.start()
-            # remote_result has been assigned globally
-        else:
-            remote_result = []
-
-        if path or self.to_file:
-            local_result = super().find(text, path, date, deltadays, level, ignorecase)
-        else:
-            local_result = []
-        if remote_thread:  # wait for remote find
+            # Now wait for thread, remote_result will be assigned globally
             remote_thread.join()
-        return [local_result, remote_result]
-
-
+            return remote_result
+            
+        else: # local find
+            if path or self.to_file:
+                return super().find(text, path, date, deltadays, level, ignorecase)
+            else:
+                return []
+            
 class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandler
     """
     Handler class which writes logging records, in json format, to
