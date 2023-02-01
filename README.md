@@ -29,10 +29,11 @@ remote_log.myRemoteLog.info("Info message 1")  # Goes to remote log and stdout
 remote_log("Info message 2", level="info")           # Also goes to remote log and stdout
 ``` 
 ```
-# Instantiate a local and remote log and send a message
+# Instantiate a local and remote log and send a message and search it
 two_logs = LogUDP("mirrorLog", path="~/.logs", udp=("<broadcast>", 5005), to_stdout=False, salt="MySecret")
 two_logs.mirrorlog.warning("Warning message 1")   # Goes to local and remote logs
 two_logs("Warning message 2", level="warning")          # Also goes to both logs
+two_logs.find("warning", remote=True)   #  Case insensitive search of remote log for "warning" in last 7 days
 ```
 ```
 # Send log message with class function
