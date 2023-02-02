@@ -38,25 +38,23 @@ def json_encode(data: str, salt: str) -> bytes:
         hash.update(json_text)
         digest = hash.digest()
         # Add the length of the data and the digest to the beginning of the bytes
-        json_bytes = struct.pack('!i', len(json_text)) + digest + json_text
+        json_bytes = struct.pack('!i', len(json_text+digest)) + digest + json_text
     except Exception as excep:
         print(f"Exception during makePickle: {excep}")
         return None
     return json_bytes
 
-
-def json_decode(data, salt:str) -> dict:
-    """Unpack the data packet, integrity check and return a dict"""
+def json_decode(data, salt:str):
+    """Unpack the data packet"""
     # Extract the length and the digest from the beginning of the packet
-    length = struct.unpack('!i', data[:4])[0]
+    length = struct.unpack('!i', data[:4])[0] + 4
+    #Check the length of the data
+    if len(data) != length:
+        raise ValueError("Data length check failed")
+    # Get the digest
     digest = data[4:4+hashlib.sha256().digest_size]
-
     # Extract the json data from the packet
     json_bytes = data[4+hashlib.sha256().digest_size:]
-
-    #Check the length of the data
-    if len(json_bytes) != length:
-        raise ValueError("Data length check failed")
 
     # Calculate the digest of the json data
     calculated_digest = hashlib.sha256(salt.encode('utf-8')+json_bytes).digest()
