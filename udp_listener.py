@@ -1,145 +1,225 @@
 #! /usr/bin/env python3
 
 """
-This applet is a bare minimum framework example of a UDP listener.
-
-UPDATE PENDING FOR USE OF SHA256 DIGEST ETC.
-FOR USE WITH V0.2 OF LOG2UDP
+This applet is a minimal framework example of a UDP listener.
+It uses separate threads and queues to 
+  * receive and decode udp packet and write to receeve_Q
+  * pull packets from receive_Q and handle them
+  * place any respnse on response_Q
+  * pull responses from response_Q, encode and transmit back to client
 
 """
+
+import hashlib
 import json
-import logging
+import os
 import socket
 import struct
+import threading
+from datetime import datetime
 from pathlib import Path
+from queue import Queue
 
-from log2udp import LogUDP
+from dateutil import parser
 
-# ################################# GLOBALS ######################
-__VER__ = "v0.1 alpha"
-UDP_SRC = ('<broadcast>', 6666)   # Socket listner address
-LOGBASE = Path(Path.home(), '.logs')  # MAKE SURE THIS EXISTS
-log_path = lambda fn: Path(LOGBASE, fn +'.log')
-# ################################# FUNCTIONS ####################
+from log2d import Log, logging
+# NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find'
+# and this ~may~ not be the PIP package yet!  
+# See https://github.com/PFython/log2d
 
-def unpack(packet: bytes) -> str:
-        """Unpack and length check UDP packet. Return data or '' """
-        pkt_len, *_ = struct.unpack('>L', packet[:4])
-        pkt_data = packet[4:]
-        if len(pkt_data) == pkt_len:
-            #print(f'length OK: {pkt_len}')
-            return packet[4:].decode(encoding='UTF-8')
-        print(f"Unpack Error: Print length should be {pkt_len} but found {len(pkt_data)}")
-        return ''
+__VER__ = 'udp_listner v0.2' # Version string
 
-def email_alert(critical_message: str):
-    """ Send email e.g. if there is a CRITICAL error"""
-    ...
+# ############################ CONSTANTS ########################
+LOGBASE = Path(os.environ['HOME'], '.logs')   # Base folder for logs
+UDP_SRC = ('<broadcast>', 6666)   # UDP listener address:port
+SECRET = "Your5ecret"   # SALT for haslib
+LOGSIZE = 1024 * 1024  # 1MB before log rotate
+LOGGERS = {}   # Dict of active loggers
 
-def udp_send_data(data, addr):
-    """Sends data (str, list, tuple, number, dict) to addr through sock via UDP in chunks"""
-    def chunks(lump, size):
-        "Yield successive n-sized chunks from lst"
-        for i in range(0, len(lump), size):
-            yield lump[i:i+size]
+# ############################# GLOBAL FUNCTIONS ################
 
-    _data = json.dumps(data).encode('utf-8')   # data as a bytes string
-    _data_length = json.dumps(len(_data), default=str).encode('utf-8') # length in bytes as string
-    udp_sock.sendto(_data_length, addr)
-    # now send the data in 200 byte chunks
-    for chunk in chunks(_data, 200):
-        #print("Send: ", chunk, addr)
-        udp_sock.sendto(chunk, addr)
+full_path = lambda fn: Path(LOGBASE, fn +'.log')
 
-def udp_logit(record: dict, address: tuple):
-    """ Parse record received from 'address' and write to log as required """
-    """  Typical command 'record' dict is:
-    {"name": "testlogname", "record": "My log message", "levelname": "DEBUG", "levelno": 10, "filename": "__init__.py",
-    "module": "__init__", "created": 1670063920.662804, "command": "LOG", "datefmt": "%Y-%m-%dT%H:%M:%S%z",
-    "fmt": "%(name)s|%(levelname)-8s|%(asctime)s|%(message)s", ...}
+def json_encode(data: str, salt: str) -> bytes:
+    """Encode the 'data' into a bytes string prepending the length and salted SHA256 digest"""
+    hash = hashlib.sha256()
+    try:
+        # encode as JSON and convert to bytes
+        json_text = json.dumps(data, default=str).encode('UTF-8')
+        # Salt the hash with the secret
+        hash.update(salt.encode('UTF-8'))
+        hash.update(json_text)
+        digest = hash.digest()
+        # Add the length of the data and the digest to the beginning of the bytes
+        json_bytes = struct.pack('!i', len(json_text+digest)) + digest + json_text
+    except Exception as excep:
+        print(f"Exception during makePickle: {excep}")
+        return None
+    return json_bytes
+
+def json_decode(data, salt:str):
+    """Unpack the data packet"""
+    # Extract the length from the beginning of the packet
+    length = struct.unpack('!i', data[:4])[0] + 4
+    # Check the length of the data
+    if len(data) != length:
+        raise ValueError("Data length check failed")
+    # Get the digest
+    digest = data[4:4+hashlib.sha256().digest_size]
+    # Extract the json data from the packet
+    json_bytes = data[4+hashlib.sha256().digest_size:]
+    # Calculate the digest of the json data
+    calculated_digest = hashlib.sha256(salt.encode('utf-8')+json_bytes).digest()
+    # Compare the calculated digest with the one received in the packet
+    if calculated_digest != digest:
+        raise ValueError("Data integrity check failed")
+    # Convert the json bytes to a dictionary
+    json_data = json_bytes.decode()
+    log_dict = json.loads(json_data)
+    return log_dict
+
+def udp_listener(queue, secret):
+    """Thread to continually listen for UDP messages.  These are 'unpacked'
+    then put on the receive queue for future processing.
     """
-    global logger
-    if not isinstance(record, dict):
-        print(f"Log record is not a dict: {record}")
+    # Create a UDP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.bind(UDP_SRC)
+
+    while True:
+        # Receive data from the socket
+        data, address = sock.recvfrom(4096)
+        # Unpack it
+        message_data = json_decode(data, secret)
+        if message_data:
+            # Put the received data and address into the queue as tuple
+            queue.put((message_data, address))
+
+def message_handler(queue, response_queue):
+    """Handle messages.  Read message from the receive queue passes it to
+       a new thread for processing.
+    """
+    while True:
+        # Get data from the queue
+        data, address = queue.get()
+
+        # Start message handler thread
+        message_thread = threading.Thread(target=handle_message, args=(data, address, response_queue,))
+        message_thread.start()
+
+def get_logger(log_name):
+    """Returns a logger for this file. If a logger for this file doesn't exist, generates one."""
+    # check if the logger for this log name has already been created
+    if log_name not in LOGGERS:
+        logger = logging.getLogger(log_name)
+        logger.setLevel(logging.DEBUG)
+        # create a rotating file handler
+        handler = logging.handlers.RotatingFileHandler(f"{log_name}.log", maxBytes=LOGSIZE, backupCount=5)
+        handler.setLevel(logging.DEBUG)
+        # add the handlers to the logger
+        logger.addHandler(handler)
+        # store the logger for reuse
+        LOGGERS[log_name] = logger
+    return LOGGERS[log_name]  # retrieve the logger from the loggers dict
+
+def handle_message(msg, address, response_queue):
+    """Handle the decoded message:  Log any log messages and respond
+       to any other handlable requests
+    """
+    if not isinstance(msg, dict):
+        print(f"msg is not a dict: {msg}")
         return
-    # Get the command. Log2udp inserts a "command" = "LOG" item in record dict
-    _command = record['command'].upper()
-    if _command == "LOG":
-        # Create a custom logger
-        if not logger:
-            logger = logging.getLogger(__name__)
-        # Dispose any current handlers if wrong name and make a new one
-        if len(logger.handlers) == 0 or logger.handlers[0].name != record['name']:
-            logger.handlers.clear()
-            # Create file handler
-            f_handler = logging.FileHandler(log_path(record['name']))
-            f_handler.set_name(record['name'])
-            logger.addHandler(f_handler)
-        # set up handler
-        logger.handlers[0].setLevel(logging.DEBUG)
+    # Get the command
+    _cmd = msg['command'].upper()
+
+    if _cmd == "LOG":   # Just log the data
+        # Get custom logger
+        logger = get_logger(msg['name'])
         # Create formatters and add it to handlers
-        f_format = logging.Formatter(record['fmt'], record['datefmt'])
+        f_format = logging.Formatter(msg['fmt'], msg['datefmt'])
         logger.handlers[0].setFormatter(f_format)
         # make the log record
-        log_record = logging.makeLogRecord(record)
+        log_record = logging.makeLogRecord(msg)
+        # Check level we need exists and add if needed
+        if not msg["levelname"] in logging._nameToLevel:
+            logging.addLevelName(msg['levelname'], msg['levelno'])
         # and send to log
         logger.handle(log_record)
-        if record['levelno'] >= 50:   # This is critical or above
-            alert_record = f"{record['hostapp']} - {log_record}" if 'hostapp' in record.keys() else log_record
-            print(alert_record)
-            email_alert(alert_record)
-        ...
-    elif _command == "FIND":
-        """ Remote 'find' request.
-        Typical command record dict is 
-        {'command': 'FIND', 'text': '', 'logname': None, 'date': None, 'deltadays': -7,
-          'level': 'NOTSET', 'ignorecase': True}
-        """
-        log_name = record['logname']
+        if msg['levelno'] >= 50:   # This is critical or above
+            ... # send suitable email alert
+            # or alternatively add SMTPHandler
+
+    elif _cmd == "FIND":   # Search a log
+        # get params
+        log_name = msg['name']
         if log_name:
-            text = record['text']
-            date = record['date']
-            deltadays = record['deltadays']
-            level = record['level']
-            ignoreCase = record['ignorecase']
+            _lname = full_path(log_name)
+        else:
+            _lname = msg['path']
+        if _lname:
+            _txt = msg['text']
+            _date = msg['date']
+            if not _date:
+                _date = datetime.now()
+            if isinstance(_date, str):
+                _date = parser.parse(_date)
+            _deltadays = msg['deltadays']
+            _level = msg['level']
+            _ignorecase = msg['ignorecase']
             # and search
-            result = LogUDP.find(text=text, logname=log_name, date=date, deltadays=deltadays,
-                        level=level, ignorecase=ignoreCase)
+            try:
+                result = Log('').find(text=_txt, path=_lname, date=_date, deltadays=_deltadays,
+                            level=_level, ignorecase=_ignorecase)
+            except Exception as excpt:
+                result = [f'Error: {excpt}']
         else:
             result = ['Error: No logname provided.']
-        if address is None:
-            return result # testing
-            #print('ADDR: {}'.format(Addr))
-        udp_send_data(result, address)
+        response_queue.put((result, address))
 
-    elif _command == "VER":
-        """ Respond with listener version.  This can be used to show its working
-            command dict is {"command": "VER"}
-        """
-        udp_send_data(__VER__, address)
+    elif _cmd == "VER":
+        # Respond with UDPLogger version.  This can be used to show its working
+        response_queue.put((__VER__, address))
 
-    else:
-        #Unknown command
-        udp_send_data(f"Error: Unknown command received: '{_command}'", Addr)
-        ...
-    
+
+def response_sender(response_queuelogger):
+    """Sends data (str, list, tuple, number) to addr through sock via UDP"""
+    # Create a UDP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    while True:
+        # Get the response from the queue
+        response, address = response_queue.get()
+        response_bytes = json_encode(response, SECRET)
+        sock.sendto(response_bytes, address)
 
 # ################################# MAIN #########################
-if __name__ == "__main__":
-    # set up the UDP sockets
 
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as udp_sock:
-        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        udp_sock.bind(UDP_SRC)
-        # Create MT logger
-        logger = None
-        while True:
-            _data, address = udp_sock.recvfrom(1024)
-            #print(f"received message from {address}: {_data}")
-            data = unpack(_data)
-            _data = None
-            if data:
-                logpacket = json.loads(data)
-                udp_logit(logpacket, address)
-                data = None
+if __name__ == '__main__':
+    # Create a queue for received messages
+    received_queue = Queue()
+
+    # Create a queue for responses
+    response_queue = Queue()
+
+    # Start the listener thread
+    listener_thread = threading.Thread(target=udp_listener, args=(received_queue, SECRET))
+    listener_thread.start()
+
+    # Start the message handler thread
+    handler_thread = threading.Thread(target=message_handler, args=(received_queue, response_queue))
+    handler_thread.start()
+
+    # Start the response sender thread
+    sender_thread = threading.Thread(target=response_sender, args=(response_queue,))
+    sender_thread.start()
+
+    """
+    Probably should add watchdog to detect thread dying
+    and fix or warn user.
+    while True:
+        sleep(1)
+        if not listener_thread.is_alive():
+            ??? etc.
+    """
