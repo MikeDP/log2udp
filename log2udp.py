@@ -23,9 +23,14 @@ from logging.handlers import DatagramHandler, SocketHandler
 from pathlib import Path
 from ascon import ascon # ASCON Encryption
 
-#from log2d import Log, logging
-from MDPLibrary.__INIT__ import Log, logging
-#from MDPLibrary.SupportLib import json_decode, json_encode
+from log2d import Log, logging
+# NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find'
+# and this ~may~ not be the PIP package yet!   Threads, queues, ASCON and attributes.
+
+Using threads and queues to increase throughput.
+Authenticate/encrypt transmitted packets with ASCON 1.2.
+Added "extras" kwarg to allow extra attributes to be simply added to logrecord. extras is a dict e.g. {"IP":"192.168.1.20", "ANOther": 42}
+# See https://github.com/PFython/log2d
 
 # ################################# GLOBALS #####################
 __VER__ = "log2udp v0.3 alpha"
