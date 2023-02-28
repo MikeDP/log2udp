@@ -11,7 +11,7 @@
 
 The UDP handler produces a log message as a `logging.logRecord` dict, using JSON rather than pickle to encode the dict into a UDP packet. The raw JSON UDP packet is converted to an autenticated and encrypted string using the lightwieght [ASCON 1.2](https://github.com/meichlseder/pyascon) protocol and transmitted to the remote listener.
 
-`logRecord` attributes can be modified from the initialisation kwargs. One (fixed) attribute is *hostapp* which defaults to "your_machine_name:your_app_name" if not explicitly specified.  It's possible to add *extra* attributes to the `logRecord` in a simple way via the "extras=_dict_" keyword argument, where _dict_ is a normal Python dictionaire of key:value pairs.  See examples below.
+`logRecord` attributes can be modified from the initialisation kwargs. One (fixed) attribute is *hostapp* which defaults to "your_machine_name:your_app_name" if not explicitly specified.  It's possible to add *extra* attributes to the `logRecord` in a simple way via the "extras=_dict_" keyword argument, where _dict_ is a normal Python dictionary of key:value pairs.  See examples below.
 
 ### **UDP - User Datagram Protocol**
 Unlike TCP, UDP is not connection-based - it's _“connectionless”_ - no connection is established before communication occurs. It is commonly referred to as the “fire-and-forget” protocol because it is not concerned about whether or not anyone actually receives the data transmitted. It is lightweight and faster than TCP and is commonly used for streaming.
