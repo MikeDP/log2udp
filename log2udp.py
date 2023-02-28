@@ -9,74 +9,96 @@ post direct to INFO etc.
 
 V0.1  MDP  25/12/22  Merry Christmas
 v0.2  MDP  09/01/23  Happy Birthday
+v0.3  MDP  28/02/23  ASCON authenticated encryption and extra attributes
 
 """
 
-from functools import wraps
+from datetime import datetime, timedelta
+import hashlib
 import json
 import socket
-import struct
-import hashlib
-from logging.handlers import DatagramHandler, SocketHandler
 import threading
+from functools import wraps
+from logging.handlers import DatagramHandler, SocketHandler
+from pathlib import Path
+from ascon import ascon # ASCON Encryption
 
-from log2d import Log, logging
+#from log2d import Log, logging
+from MDPLibrary.__INIT__ import Log, logging
+#from MDPLibrary.SupportLib import json_decode, json_encode
 
 # ################################# GLOBALS #####################
-__VER__ = "v0.2 alpha"
+__VER__ = "log2udp v0.3 alpha"
+VER_CMD = {"command": "VER", "name": 'apps'}
 
 # ################################# FUNCTIONS ###################
 
-def json_encode(data: str, salt: str) -> bytes:
-    """Encode the 'data' into a bytes string prepending the length and salted SHA256 digest"""
-    hash = hashlib.sha256()
-    try:
-        # encode as JSON and convert to bytes
-        json_text = json.dumps(data, default=str).encode('UTF-8')
-        # Salt the hash with the secret
-        hash.update(salt.encode('UTF-8'))
-        hash.update(json_text)
-        digest = hash.digest()
-        # Add the length of the data and the digest to the beginning of the bytes
-        json_bytes = struct.pack('!i', len(json_text+digest)) + digest + json_text
-    except Exception as excep:
-        print(f"Exception during makePickle: {excep}")
-        return None
-    return json_bytes
+def get_hostapp():
+    """Return the present 'HOST:APP' string"""
+    # Get hostapp details
+    _hostname = socket.gethostname()
+    _hostapp = Path(__file__).stem
+    return f"{_hostname.upper()}:{_hostapp.upper()}"
 
-def json_decode(data, salt:str):
-    """Unpack the data packet"""
-    # Extract the length and the digest from the beginning of the packet
-    length = struct.unpack('!i', data[:4])[0] + 4
-    #Check the length of the data
-    if len(data) != length:
-        raise ValueError("Data length check failed")
-    # Get the digest
-    digest = data[4:4+hashlib.sha256().digest_size]
-    # Extract the json data from the packet
-    json_bytes = data[4+hashlib.sha256().digest_size:]
-
-    # Calculate the digest of the json data
-    calculated_digest = hashlib.sha256(salt.encode('utf-8')+json_bytes).digest()
-
-    # Compare the calculated digest with the one received in the packet
-    if calculated_digest != digest:
-        raise ValueError("Data integrity check failed")
-
-    # Convert the json bytes to a dictionary
-    json_data = json_bytes.decode()
-    log_dict = json.loads(json_data)
-
-    return log_dict
-
-def make_socket():
+def make_socket(timeout: int=2):
     """ Make a UDP socket that can use broadcasts"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.settimeout(5)
+    sock.settimeout(timeout)
     return sock
 
+def json_encode(data: any, key: str) -> bytes:
+    """Encode the 'data' into a bytes string using ASCON"""
+    # encode as JSON
+    json_data = json.dumps(data, default=str)
+    # encrypt with ASCON
+    encrypted_bytes = asc_encrypt(json_data, key).encode('utf-8')
+    return encrypted_bytes
+
+def json_decode(data:bytes, key:str) -> any:
+    """Unpack the data packet"""
+    # Decrypt with ASCON
+    json_data = asc_decrypt(data.decode('utf-8'), key)
+    # and decode from jason
+    decrypt = json.loads(json_data)
+    return decrypt
+
+def asc_encrypt(plaintext:str, key:str) -> str:
+    """ASCON1.2 encryption.  Plaintext: str, key: str will hashed to 16 bytes.
+        Returns: string of hex characters
+    """
+    # Fix key and convert to bytes
+    _key = hashlib.md5(key.encode('utf-8')).digest()
+    #Convert plaintext to byte
+    plaintext_bytes = plaintext.encode('utf-8')
+    # Generate a random 16 byte nonce
+    nonce = ascon.get_random_bytes(16)
+    # Encrypt plaintext with key and nonce
+    ciphertext = ascon.ascon_encrypt(_key, nonce, b"", plaintext_bytes)
+    # Append the nonce to the ciphertext
+    encrypted_message = nonce + ciphertext
+    # Convert encrypted message bytes to string of hex
+    return encrypted_message.hex()  # string of hex characters
+
+def asc_decrypt(encrypted_message_hex:str, key:str) -> str:
+    """ASCON1.2 decryption. encrypted_message_hex: str, key: str will hashed to 16 bytes.
+        Returns: str
+    """
+    # Fix key to 16 bytes
+    _key = hashlib.md5(key.encode('utf-8')).digest()
+    # Convert encrypted message from hex to bytes
+    encrypted_message = bytes.fromhex(encrypted_message_hex)
+    # Extract the nonce and ciphertext from the encrypted message
+    nonce = encrypted_message[:16]
+    ciphertext = encrypted_message[16:]
+    # Decrypt ciphertext with key and nonce
+    try:
+        plaintext_bytes = ascon.ascon_decrypt(_key, nonce, b"", ciphertext)
+    except ValueError:
+        raise ValueError("Decryption failed - message has been tampered with")
+    # Convert plaintext bytes to string
+    return plaintext_bytes.decode()  # String
 
 # ################################# CLASSES #####################
 
@@ -97,22 +119,42 @@ class LogUDP(Log):
     udp = ("localhost", 50005)
     remote_result = []
 
-    def __init__(self, name, **kwargs):
-        """ Initialise and add UDP handler if requested in kwargs
-            as 'udp=("Name",port)' e.g. udp=("<broadcast>", 6666)
-            and secret for SHA256 salt as salt="secret_salt"
+    def __init__(self, name='', **kwargs):
+        """ Initialise - additional (to log2d) kwargs recognised:
+              'udp=("Name", port)' e.g. udp=("<broadcast>", 6666), add UDP handler
+              'timeout=x' [0..x..5, def:2] for UDP receive timeout
+              'salt="MySecret"' for UDP encryption key
+              'hostapp="source of msg"' [def: auto] for hostapp attribute
+              'extras=dict_of_new_attributes' to add more record attributes as key:value dict
         """
+        # Set up the hostapp
+        self.hostapp = kwargs.get('hostapp', get_hostapp())
         # Set up for any UDP use first
         if "udp" in kwargs:
             self.to_udp = True
             self.udp = kwargs["udp"]
-            if "salt" in kwargs:
-                self.secret = kwargs["salt"]
-            else:
-                self.secret = ""
+            self.secret = kwargs.get('salt', '')
+            self.timeout = kwargs.get('timeout', 2)
+            self.timeout = min(5, max(self.timeout, 0)) # timeout in range 0..5
+        # Get any additional log attributes
+        if 'extras' in kwargs:
+            self.extras = kwargs['extras']
+            if not isinstance(self.extras, dict):
+                self.extras = None
+        else:
+            self.extras = None
         # Now initialise. This also calls get_handlers
         super().__init__(name, **kwargs)
-
+        self.logger.addFilter(self.extras_filter)
+    
+    def extras_filter(self, record):
+        """Add hostapp and any other extras to logrecord for all handlers"""
+        record.hostapp = self.hostapp
+        if self.extras:
+            for key in self.extras:
+                setattr(record, key, self.extras[key])
+        return True
+        
     def get_handlers(self):
         """Add UDP handler if reqested"""
         # get normal handlers
@@ -120,19 +162,27 @@ class LogUDP(Log):
         # add UDP handler
         if self.to_udp:
             log_udp_formatter = logging.Formatter(fmt=self.fmt, datefmt=self.datefmt)
-            handler = UDPHandler(*self.udp, self.secret)
+            handler = UDPHandler(*self.udp, self.secret, self.timeout)  #, self.hostapp)
             handler.setFormatter(log_udp_formatter)
             handler.setLevel(level=self.level_int)
             handlers += [handler]
         return handlers
 
     def version(self):
-        """ Version string"""
-        return __VER__
+        """ Version string from local and remote"""
+        try:
+            ver_sock = make_socket(self.timeout)
+            ver_sock.sendto(json_encode(VER_CMD, self.secret), self.udp)
+            # now wait for reply
+            data, addr = ver_sock.recvfrom(4096)
+            remote_result = json_decode(data, self.secret)
+        except Exception as xcpt: # timeout?
+            remote_result = ["Timeout"]
+        return remote_result
 
     def __call__(self, *args, **kwargs):
         """
-        Shortcut to log at effective logging level using easy syntax e.g.
+        Shortcut to log at any logging level using easy syntax e.g.
         mylog = Log("mylog")
         mylog("This text gets added to the logger output - no fuss!") # default 'debug'
         mylog("But this text goes to ERROR", level="ErRor")  # case insensitive, Goes to 'error'
@@ -141,14 +191,14 @@ class LogUDP(Log):
         if "level" in kwargs:
             lvl = kwargs['level'].upper()
             if lvl in logging._nameToLevel:
-                level = lvl.lower()
-        getattr(self.logger, level)(*args)
+                level = lvl
+        getattr(self.logger, level.lower())(*args)
 
     def remote_find(self, find_command: dict):
         """Find via UDP.  Runs as a thread. Result in global 'remote_result' """
         global remote_result
         try:
-            find_sock = make_socket()
+            find_sock = make_socket(self.timeout)
             find_sock.sendto(find_command, self.udp)
             # now wait for reply
             data, addr = find_sock.recvfrom(4096)
@@ -174,9 +224,9 @@ class LogUDP(Log):
         if self.to_udp and remote:
             # Construct command dict
             command = {"command": "FIND"}
-            command['deflog'] = self.name
+            command['name'] = self.name
             command["text"] = text
-            command["name"] = path
+            command["path"] = path
             command["date"] = date
             command["deltadays"] = deltadays
             command["level"] = level
@@ -188,43 +238,44 @@ class LogUDP(Log):
             # Now wait for thread, remote_result will be assigned globally
             remote_thread.join()
             return remote_result
-            
         else: # local find
             if path or self.to_file:
                 return super().find(text, path, date, deltadays, level, ignorecase)
-            else:
-                return []
-            
+            return []  # No search so return nothing
+
 class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandler
     """
-    Handler class which writes logging records, in json format, to
-    a UDP socket.  The logRecord's dictionary (__dict__), is used
-    which makes simple to decode at the recieving end - just use json.dumps().
-    The json packet is preceeded by a 4 byte length int and a salted SHA256 digest.
+    Handler that writes logging records, in json format, to
+    a UDP socket.  The logRecord's dictionary (__dict__), is sent
+    as an authenticated/encrypted (ASCON) hex json string which 
+    makes it simple to decode at the receiving end.
     """
 
-    def __init__(self, host, port, secret):
+    def __init__(self, host, port, secret, timeout=2):
         """
         Initializes the handler with a specific host address and port.
         Host can be ip or name - 'localhost', '<broadcast>' etc.
         port is 1024 < port < 65536
-        secret is salt for SHA256 digest of data packet
+        secret is key for encryption of data packet
+        timeout is for any reply
         """
         SocketHandler.__init__(self, host, port)
         self.hash = hashlib.sha256()
         self.closeOnError = False
         self.secret = secret
+        self.timeout = timeout
+        #self.hostapp = hostapp
 
     def makeSocket(self):
         """
         The factory method of SocketHandler is here overridden to create
         a UDP socket (SOCK_DGRAM).
         """
-        return make_socket()
+        return make_socket(self.timeout)
 
     def send(self, pkt: bytes):
         """
-        Send the json string to the socket.
+        Send the jason string to the socket.
         """
         if self.sock is None:
             self.createSocket()
@@ -233,7 +284,7 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
 
     def makePickle(self, record) -> str:
         """
-        Convert the message data to json dump, prefixed with length and digest
+        Convert the message data to json dump, prefixed with length
         """
         exinf = record.exc_info
         if exinf:
@@ -241,22 +292,30 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
             _ = self.format(record)
         # Will only work when record only contains json serialisable objects
         msg = dict(record.__dict__)
-        # Hardwire just to LOG stuff at this stage - find etc later
+        # Add command to LOG
         msg['command'] = 'LOG'
         # Add two formatting strings
         msg['datefmt'] = self.formatter.datefmt
         msg['fmt'] = self.formatter._fmt
-        msg['msg'] = msg.get("msg", record.getMessage())
-        # Now return preceed by 4 byte length
+        # Now return encoded message
         return json_encode(msg, self.secret)
 
 # For simplified dev testing
 if __name__ == "__main__":
-    mylog = LogUDP('mylog', to_stdout=True, to_file=True,  udp=('<broadcast>', 6666), salt="M15ecret")
-    #mylog.mylog.info("Test info message")
-    mylog("Send to CRITICAL now", level="critical")
-    #print(mylog.version())
-    #LogUDP("mylog", udp=("<broadcast>", 6666), salt="M15ecret")("Class sensible error!", "error" )
-    A = mylog.find()
-    #A = LogUDP('').find(path='mylog')
-    print(A)
+    now = datetime.now() - timedelta(seconds=1)
+    msgFmt = "%(hostapp)s|%(asctime)s|%(levelname)-8s|%(message)s|%(WTF)s"
+    dateFmt = "%Y-%m-%dT%H:%M:%S"
+    extras={"IP":"192.168.1.50", "WTF":42}
+    mylog = LogUDP('mylog', datefmt=dateFmt, fmt=msgFmt, udp=("<broadcast>", 6666), salt="M15ecret", hostapp="TestzzzHOST", extras=extras)
+    mylog.logger.warning("More realistic log message")
+    #mylog("Error message", level="error")
+    #res = mylog.find(remote=True, date=now, deltadays=-1, level='error')
+    #res = mylog.find(remote=True, date=now, deltadays=+1, level="Error")
+    #print(f"\n###############\n{res}")
+    #mylog.add_level("success", 25)
+    #mylog("CRITICAL Success message, maybe in HTML?", level='critical')
+    #mylog.logger.success("More fun!")
+    #LogUDP("", udp=("<broadcast>", 6666), salt="M15ecret")("Class sensible error!", "error" )
+    #mylog.add_level('success', above="INFO")
+
+    print(f"Version: {mylog.version()}")
