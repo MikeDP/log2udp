@@ -7,7 +7,7 @@
 
 [`log2d`](https://github.com/PFython/log2d) is a wrapper around Python `logging` that makes it trivially simple, sane and logical to implement Python `logging` without needing to understand it's complexity.
 
-`log2udp` extends this by adding a simple UDP datagram handler to `log2d` that allows log messages to be sent to a remote logger thus providing a simple centralised logging system.
+`log2udp` extends this by adding a simple UDP datagram handler to `log2d` that allows log messages to be sent to a remote logger thus providing a simple centralised logging system. It also simplifies adding *'extra'* static and dynamic attributes to log messages and dispatching the messages themselves.
 
 The UDP handler produces a log message as a `logging.logRecord` dict, using JSON rather than pickle to encode the dict into a UDP packet. The raw JSON UDP packet is converted to an autenticated and encrypted string using the lightwieght [ASCON 1.2](https://github.com/meichlseder/pyascon) protocol and transmitted to the remote listener.
 
@@ -31,15 +31,16 @@ For general LogUPD usage, see the examples provided for [log2d](https://github.c
 ```
 # Instantiate a remote log on a specific machine with local stdout echo and send a log message
 remote_log = LogUDP("myRemoteLog", udp=("192.168.1.250", 6666), to_stdout=True, salt="MySecret")
-remote_log.myRemoteLog.info("Info message 1")  # Goes to remote log and stdout
-remote_log("Info message 2", level="info")           # Also goes to reServer1|2023-02-28T14:07:22|INFO    |Message to remote log|192.168.1.20|Mikeymote log and stdout
+remote_log.myRemoteLog.info("Info message 1")  # Goes to remote log and stdout - as per log2d
+remote_log.info("Info message 2")              # Also goes to same logs - simplified
+remote_log("Info message 3", level="info")     # Also goes to remote log and stdout
 ``` 
 ```
 # Instantiate a local and remote log and send a message and search it
 two_logs = LogUDP("mirrorLog", path="~/.logs", udp=("<broadcast>", 5005), to_stdout=False, salt="MySecret")
-two_logs.mirrorlog.warning("Warning message 1")   # Goes to local and remote logs
-two_logs("Warning message 2", level="warning")          # Also goes to both logs
-two_logs.find("warning", remote=True)   #  Case insensitive search of remote log for "warning" in last 7 days
+two_logs.mirrorlog.warning("Warning message 1")   # Goes to local and remote logs - as per log2d
+two_logs.warning("Warning message 2")             # again, same logs - simplified
+two_logs("Warning message 3", level="warning")    # Also goes to both logs
 ```
 ```
 # Send log message with class function
@@ -51,5 +52,12 @@ new_attrs = {"IP": 192.168.1.20", "User": "Alice"}
 fmt = "%(hostapp)s|%(asctime)s|%(levelname)-8s|%(message)s|%(IP)s|%(User)s"
 remote_log = LogUDP("myRemoteLog", udp=("192.168.1.250", 6666), fmt=fmt, salt="MySecret", hostapp="Server1", extras=new_attrs)
 remote_log("Message to remote log", level="INFO")
-# Results in:  `Server1|2023-02-28T14:07:22|INFO    |Message to remote log|192.168.1.20|Alice` 
+...
+remote_log.info("Message 2 to remote log", User="Mikey")  # Dynamically change 'User'
+...
+remote_log.find("info", remote=True)   #  Case insensitive search of remote log for "info" in last 7 days
+
+# Results in:  
+  `Server1|2023-02-28T14:07:22|INFO    |Message to remote log|192.168.1.20|Alice`
+  `Server1|2023-02-28T14:07:23|INFO    |Message 2 to remote log|192.168.1.20|Mikey`
 ```
