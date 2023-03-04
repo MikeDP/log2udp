@@ -9,10 +9,10 @@ post direct to INFO etc.
 
 V0.1  MDP  25/12/22  Merry Christmas
 v0.2  MDP  09/01/23  Happy Birthday
-v0.3  MDP  28/02/23  ASCON authenticated encryption and extra attributes
+v0.3  MDP  28/02/23  ASCON authenticated encryption
+v0.4  MDP  04/03/23  Simplified/enhanced 'extra' attributes
 
 """
-
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -27,13 +27,10 @@ from log2d import Log, logging
 # NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find'
 # and this ~may~ not be the PIP package yet!   Threads, queues, ASCON and attributes.
 
-Using threads and queues to increase throughput.
-Authenticate/encrypt transmitted packets with ASCON 1.2.
-Added "extras" kwarg to allow extra attributes to be simply added to logrecord. extras is a dict e.g. {"IP":"192.168.1.20", "ANOther": 42}
-# See https://github.com/PFython/log2d
+from MDPLibrary.__INIT__ import Log, logging
 
 # ################################# GLOBALS #####################
-__VER__ = "log2udp v0.3 alpha"
+__VER__ = "v0.4 beta"
 VER_CMD = {"command": "VER", "name": 'apps'}
 
 # ################################# FUNCTIONS ###################
@@ -70,8 +67,10 @@ def json_decode(data:bytes, key:str) -> any:
     return decrypt
 
 def asc_encrypt(plaintext:str, key:str) -> str:
-    """ASCON1.2 encryption.  Plaintext: str, key: str will hashed to 16 bytes.
-        Returns: string of hex characters
+    """ASCON1.2 encryption.
+       Plaintext: str plaintext input
+       key: str encryp[tion key. Will be hashed to 16 bytes.
+       Returns: encrypted string of hex characters
     """
     # Fix key and convert to bytes
     _key = hashlib.md5(key.encode('utf-8')).digest()
@@ -87,8 +86,10 @@ def asc_encrypt(plaintext:str, key:str) -> str:
     return encrypted_message.hex()  # string of hex characters
 
 def asc_decrypt(encrypted_message_hex:str, key:str) -> str:
-    """ASCON1.2 decryption. encrypted_message_hex: str, key: str will hashed to 16 bytes.
-        Returns: str
+    """ASCON1.2 decryption.
+        encrypted_message_hex: str encrypted text input
+        key: str encryption key. Will be hashed to 16 bytes.
+        Returns: str - decrypted plaintext
     """
     # Fix key to 16 bytes
     _key = hashlib.md5(key.encode('utf-8')).digest()
@@ -120,9 +121,6 @@ class ClassOrMethod(object):
 
 class LogUDP(Log):
     """ 'log2d.Log' clone incorporating a UDP data handler. """
-    to_udp = False
-    udp = ("localhost", 50005)
-    remote_result = []
 
     def __init__(self, name='', **kwargs):
         """ Initialise - additional (to log2d) kwargs recognised:
@@ -132,6 +130,10 @@ class LogUDP(Log):
               'hostapp="source of msg"' [def: auto] for hostapp attribute
               'extras=dict_of_new_attributes' to add more record attributes as key:value dict
         """
+        # Generic instance stuff
+        self.to_udp = False
+        self.udp = ("localhost", 50005)
+        self.remote_result = []
         # Set up the hostapp
         self.hostapp = kwargs.get('hostapp', get_hostapp())
         # Set up for any UDP use first
@@ -151,7 +153,7 @@ class LogUDP(Log):
         # Now initialise. This also calls get_handlers
         super().__init__(name, **kwargs)
         self.logger.addFilter(self.extras_filter)
-    
+
     def extras_filter(self, record):
         """Add hostapp and any other extras to logrecord for all handlers"""
         record.hostapp = self.hostapp
@@ -159,7 +161,7 @@ class LogUDP(Log):
             for key in self.extras:
                 setattr(record, key, self.extras[key])
         return True
-        
+
     def get_handlers(self):
         """Add UDP handler if reqested"""
         # get normal handlers
@@ -167,7 +169,7 @@ class LogUDP(Log):
         # add UDP handler
         if self.to_udp:
             log_udp_formatter = logging.Formatter(fmt=self.fmt, datefmt=self.datefmt)
-            handler = UDPHandler(*self.udp, self.secret, self.timeout)  #, self.hostapp)
+            handler = UDPHandler(*self.udp, self.secret, self.timeout)
             handler.setFormatter(log_udp_formatter)
             handler.setLevel(level=self.level_int)
             handlers += [handler]
@@ -185,19 +187,43 @@ class LogUDP(Log):
             remote_result = ["Timeout"]
         return remote_result
 
+    def __getattr__(self, name, *args, **kwargs):
+        """Modified to trap LogUPD.'level'() type calls which
+        are re-directed to __call__"""
+        if name.upper() in logging._nameToLevel:
+            self.savelevel = name
+            return self.__redirect__
+        raise AttributeError(f": '{self.name}' object has no attribute '{name}'")
+    
+    def __redirect__(self, *args, **kwargs):
+        """Redirect unknown method calls to __call__ 
+        adding the correct 'level' """
+        # Add level to kwargs
+        kwargs['level'] = self.savelevel
+        # and call dipatcher
+        self.__call__(*args, **kwargs)
+
     def __call__(self, *args, **kwargs):
         """
         Shortcut to log at any logging level using easy syntax e.g.
-        mylog = Log("mylog")
-        mylog("This text gets added to the logger output - no fuss!") # default 'debug'
-        mylog("But this text goes to ERROR", level="ErRor")  # case insensitive, Goes to 'error'
+          mylog = LogUDP("mylog", ...)
+          mylog("This text gets added to the logger output - no fuss!") # default 'debug'
+          mylog("But this text goes to ERROR", level="ErRor")  # case insensitive, Goes to 'error'
+          mylog("Dynamic record attribute possible.", level="info", User="Bob") # User passed as element in extras dict at init.
         """
         level = logging.getLevelName(self.logger.getEffectiveLevel())
-        if "level" in kwargs:
-            lvl = kwargs['level'].upper()
-            if lvl in logging._nameToLevel:
-                level = lvl
+        lvl = kwargs.pop('level', level).upper()
+        if lvl in logging._nameToLevel:
+            level = lvl
+        # Now sort any 'extras' attribute dynamic values
+        def_extras = self.extras.copy()
+        for attr in self.extras:
+            new_value = kwargs.pop(attr, None)
+            if new_value:
+                self.extras[attr] = new_value
         getattr(self.logger, level.lower())(*args)
+        # Reset old 'extras' value
+        self.extras = def_extras.copy()
 
     def remote_find(self, find_command: dict):
         """Find via UDP.  Runs as a thread. Result in global 'remote_result' """
@@ -252,8 +278,8 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
     """
     Handler that writes logging records, in json format, to
     a UDP socket.  The logRecord's dictionary (__dict__), is sent
-    as an authenticated/encrypted (ASCON) hex json string which 
-    makes it simple to decode at the receiving end.
+    as an authenticated/encrypted (ASCON) hex json string which
+    makes it simple to decode at the recieving end.
     """
 
     def __init__(self, host, port, secret, timeout=2):
@@ -311,16 +337,38 @@ if __name__ == "__main__":
     msgFmt = "%(hostapp)s|%(asctime)s|%(levelname)-8s|%(message)s|%(WTF)s"
     dateFmt = "%Y-%m-%dT%H:%M:%S"
     extras={"IP":"192.168.1.50", "WTF":42}
-    mylog = LogUDP('mylog', datefmt=dateFmt, fmt=msgFmt, udp=("<broadcast>", 6666), salt="M15ecret", hostapp="TestzzzHOST", extras=extras)
-    mylog.logger.warning("More realistic log message")
-    #mylog("Error message", level="error")
+    mylog = LogUDP('mylog', datefmt=dateFmt, fmt=msgFmt, udp=("<broadcast>", 6666), salt="M15ecret", hostapp="TestHOST", extras=extras)
+    mylog.add_level("success", 35)
+    
+    mylog.info("Critical Info message",  WTF=55)
+    
+    #mylog.logger.warning("More realistic log message")
+    #mylog("Error message", level="error", WTF=50)
     #res = mylog.find(remote=True, date=now, deltadays=-1, level='error')
     #res = mylog.find(remote=True, date=now, deltadays=+1, level="Error")
     #print(f"\n###############\n{res}")
     #mylog.add_level("success", 25)
     #mylog("CRITICAL Success message, maybe in HTML?", level='critical')
     #mylog.logger.success("More fun!")
+
+
     #LogUDP("", udp=("<broadcast>", 6666), salt="M15ecret")("Class sensible error!", "error" )
     #mylog.add_level('success', above="INFO")
 
     print(f"Version: {mylog.version()}")
+
+
+    """
+
+
+    mylog = LogUDP('wtf', to_file=True, udp=('<broadcast>', 6666), salt="M15ecret")
+    mylog("Simple send to default DEBUG")
+    #mylog.mylog.info("Test info message")
+    mylog("Send to CRITICAL now", level="critical")
+    #print(mylog.version())
+    #LogUDP("mylog", udp=("<broadcast>", 6666), salt="M15ecret")("Class sensible error!", "error" )
+    A = mylog.find()
+    #A = LogUDP('').find(path='mylog')
+    #A = LogUDP('mylog', udp=('<broadcast>', 6666), salt="M15ecret").find()
+    print(A)
+    """
