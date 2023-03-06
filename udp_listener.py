@@ -155,7 +155,7 @@ def handle_message(encrypted_msg, address, response_queue):
         log_record = logging.makeLogRecord(msg)
         # Check level we need exists and add if needed
         if not msg["levelname"] in logging._nameToLevel:
-            logging.addLevelName(msg['levelname'], msg['levelno'])
+            logging.addLevelName(msg['levelno'], msg['levelname'])
         # and send to log
         logger.handle(log_record)
         if msg['levelno'] >= 50:   # This is critical or above
