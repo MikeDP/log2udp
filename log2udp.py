@@ -143,13 +143,10 @@ class LogUDP(Log):
             self.secret = kwargs.get('salt', '')
             self.timeout = kwargs.get('timeout', 2)
             self.timeout = min(5, max(self.timeout, 0)) # timeout in range 0..5
-        # Get any additional log attributes
-        if 'extras' in kwargs:
-            self.extras = kwargs['extras']
-            if not isinstance(self.extras, dict):
-                self.extras = None
-        else:
-            self.extras = None
+        # Get any additional log attributes dict
+        self.extras = kwargs.get('extras', {})
+        if not isinstance(self.extras, dict):
+            self.extras = {}
         # Now initialise. This also calls get_handlers
         super().__init__(name, **kwargs)
         self.logger.addFilter(self.extras_filter)
