@@ -193,7 +193,7 @@ def handle_message(encrypted_msg, address, response_queue):
         # Respond with UDPLogger version.  This can be used to show its working
         response_queue.put((__VER__, address))
 
-def response_sender(response_queuelogger):
+def response_sender(response_queue):
     """Sends data (str, list, tuple, number) to addr through sock via UDP"""
     # Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
