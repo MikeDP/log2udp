@@ -11,27 +11,28 @@ V0.1  MDP  25/12/22  Merry Christmas
 v0.2  MDP  09/01/23  Happy Birthday
 v0.3  MDP  28/02/23  ASCON authenticated encryption
 v0.4  MDP  04/03/23  Simplified/enhanced 'extra' attributes
-
+v0.41 MDP  16/03/23  UDP receive now chunked
 """
-from datetime import datetime, timedelta
+
 import hashlib
 import json
 import socket
+import struct
 import threading
+from datetime import datetime, timedelta
 from functools import wraps
 from logging.handlers import DatagramHandler, SocketHandler
 from pathlib import Path
-from ascon import ascon # ASCON Encryption
 
-from log2d import Log, logging
-# NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find'
-# and this ~may~ not be the PIP package yet!   Threads, queues, ASCON and attributes.
+from ascon import ascon  # ASCON Encryption
 
-from MDPLibrary.__INIT__ import Log, logging
+#from log2d import Log, logging
+from MDPLibrary.log2d.log2d import Log, logging
 
 # ################################# GLOBALS #####################
-__VER__ = "v0.4 beta"
+__VER__ = "v0.41 beta"
 VER_CMD = {"command": "VER", "name": 'apps'}
+BUFSIZE = 4096
 
 # ################################# FUNCTIONS ###################
 
@@ -121,6 +122,7 @@ class ClassOrMethod(object):
 
 class LogUDP(Log):
     """ 'log2d.Log' clone incorporating a UDP data handler. """
+    to_udp = False # required for local class find
 
     def __init__(self, name='', **kwargs):
         """ Initialise - additional (to log2d) kwargs recognised:
@@ -128,7 +130,7 @@ class LogUDP(Log):
               'timeout=x' [0..x..5, def:2] for UDP receive timeout
               'salt="MySecret"' for UDP encryption key
               'hostapp="source of msg"' [def: auto] for hostapp attribute
-              'extras=dict_of_new_attributes' to add more record attributes as key:value dict
+              'extras={dict: of_new_attributes}' to add more record attributes as key:value dict
         """
         # Generic instance stuff
         self.to_udp = False
@@ -143,7 +145,7 @@ class LogUDP(Log):
             self.secret = kwargs.get('salt', '')
             self.timeout = kwargs.get('timeout', 2)
             self.timeout = min(5, max(self.timeout, 0)) # timeout in range 0..5
-        # Get any additional log attributes dict
+        # Get any additional log attributes
         self.extras = kwargs.get('extras', {})
         if not isinstance(self.extras, dict):
             self.extras = {}
@@ -178,11 +180,19 @@ class LogUDP(Log):
             ver_sock = make_socket(self.timeout)
             ver_sock.sendto(json_encode(VER_CMD, self.secret), self.udp)
             # now wait for reply
-            data, addr = ver_sock.recvfrom(4096)
-            remote_result = json_decode(data, self.secret)
+            length_bytes, addr = ver_sock.recvfrom(4)  # length int
+            total_length = struct.unpack('>L', length_bytes)[0]
+            # receive the data in chunks
+            data, addr = ver_sock.recvfrom(min(BUFSIZE, total_length))
+            remote_ver = json_decode(data, self.secret) 
         except Exception as xcpt: # timeout?
-            remote_result = ["Timeout"]
-        return remote_result
+            if isinstance(xcpt, socket.timeout):
+                remote_ver = ["Timeout"]
+            else:
+                remote_ver = [f'Exception: {xcpt}']
+        finally:
+            ver_sock.close()
+        return remote_ver
 
     def __getattr__(self, name, *args, **kwargs):
         """Modified to trap LogUPD.'level'() type calls which
@@ -191,9 +201,9 @@ class LogUDP(Log):
             self.savelevel = name
             return self.__redirect__
         raise AttributeError(f": '{self.name}' object has no attribute '{name}'")
-    
+
     def __redirect__(self, *args, **kwargs):
-        """Redirect unknown method calls to __call__ 
+        """Redirect unknown method calls to __call__
         adding the correct 'level' """
         # Add level to kwargs
         kwargs['level'] = self.savelevel
@@ -206,13 +216,14 @@ class LogUDP(Log):
           mylog = LogUDP("mylog", ...)
           mylog("This text gets added to the logger output - no fuss!") # default 'debug'
           mylog("But this text goes to ERROR", level="ErRor")  # case insensitive, Goes to 'error'
-          mylog("Dynamic record attribute possible.", level="info", User="Bob") # User passed as element in extras dict at init.
+          mylog("Dynamic record attribute possible.", level="info", User="Bob") # User is first passed #
+                                                                                  as element in extras dict at init.
         """
         level = logging.getLevelName(self.logger.getEffectiveLevel())
         lvl = kwargs.pop('level', level).upper()
         if lvl in logging._nameToLevel:
             level = lvl
-        # Now sort any 'extras' attribute dynamic values
+        # Now sort any 'extras' attribute values
         def_extras = self.extras.copy()
         for attr in self.extras:
             new_value = kwargs.pop(attr, None)
@@ -224,15 +235,30 @@ class LogUDP(Log):
 
     def remote_find(self, find_command: dict):
         """Find via UDP.  Runs as a thread. Result in global 'remote_result' """
-        global remote_result
+        global remote_result  # This returns the result when the thread ends
         try:
             find_sock = make_socket(self.timeout)
             find_sock.sendto(find_command, self.udp)
-            # now wait for reply
-            data, addr = find_sock.recvfrom(4096)
+            # receive the total length of the data as a 4-byte unsigned integer
+            length_bytes, addr = find_sock.recvfrom(4)
+            total_length = struct.unpack('>L', length_bytes)[0]
+            # receive the data in chunks
+            chunks = []
+            while total_length > 0:
+                chunk, addr = find_sock.recvfrom(min(BUFSIZE, total_length))
+                chunks.append(chunk)
+                total_length -= len(chunk)
+            # combine the chunks into a single data string
+            data = b''.join(chunks)
+            # decrypt
             remote_result = json_decode(data, self.secret)
-        except: # timeout?
-            remote_result = ["Timeout"]
+        except Exception as xcpt: # timeout?
+            if isinstance(xcpt, socket.timeout):
+                remote_result = ["Timeout"]
+            else:
+                remote_result = [f'Exception: {xcpt}']
+        finally:
+            find_sock.close()
 
     @ClassOrMethod
     def find(self, text: str="", path=None, date=None, deltadays: int=-7, level: str='NOTSET',
@@ -247,7 +273,7 @@ class LogUDP(Log):
                remote:      Perform remote search over UDP. Default True
             Returns [r/l find] where r/l find is [MSG,[...]], [error msg.] or []
         """
-        global remote_result
+        global remote_result # This holds the result when remote_find thread ends
         remote_thread = None
         if self.to_udp and remote:
             # Construct command dict
@@ -310,7 +336,7 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
         if pkt:
             self.sock.sendto(pkt, self.address)
 
-    def makePickle(self, record) -> str:
+    def makePickle(self, record:logging.LogRecord) -> bytes:
         """
         Convert the message data to json dump, prefixed with length
         """
@@ -331,14 +357,15 @@ class UDPHandler(DatagramHandler):  # Inherit from logging.Handler.DatagramHandl
 # For simplified dev testing
 if __name__ == "__main__":
     now = datetime.now() - timedelta(seconds=1)
-    msgFmt = "%(hostapp)s|%(asctime)s|%(levelname)-8s|%(message)s|%(WTF)s"
-    dateFmt = "%Y-%m-%dT%H:%M:%S"
+    msg_fmt = "%(hostapp)s|%(asctime)s|%(levelname)-8s|%(message)s|%(WTF)s"
+    date_fmt = "%Y-%m-%dT%H:%M:%S"
     extras={"IP":"192.168.1.50", "WTF":42}
-    mylog = LogUDP('mylog', datefmt=dateFmt, fmt=msgFmt, udp=("<broadcast>", 6666), salt="M15ecret", hostapp="TestHOST", extras=extras)
-    mylog.add_level("success", 35)
-    
-    mylog.info("Critical Info message",  WTF=55)
-    
+    mylog = LogUDP('mylog', datefmt=date_fmt, fmt=msg_fmt, udp=("<broadcast>", 6666),
+                   salt="M15ecret", hostapp="TestHOST", extras=extras)
+    #mylog.add_level("success", 35)
+
+    #mylog.info("Critical Info message",  WTF=55)
+
     #mylog.logger.warning("More realistic log message")
     #mylog("Error message", level="error", WTF=50)
     #res = mylog.find(remote=True, date=now, deltadays=-1, level='error')
@@ -353,11 +380,9 @@ if __name__ == "__main__":
     #mylog.add_level('success', above="INFO")
 
     print(f"Version: {mylog.version()}")
-
-
+    pass
+    
     """
-
-
     mylog = LogUDP('wtf', to_file=True, udp=('<broadcast>', 6666), salt="M15ecret")
     mylog("Simple send to default DEBUG")
     #mylog.mylog.info("Test info message")
