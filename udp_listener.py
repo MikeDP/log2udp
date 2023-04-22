@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import socket
+import struct
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -20,14 +21,16 @@ from queue import Queue
 from ascon import ascon
 from dateutil import parser
 
-from log2d import Log, logging
+from MDPLibrary.log2d.log2d import Log, logging
+#from log2d import Log, logging
 # NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find'
-# and this ~may~ not be the PIP package yet!  
+# and this ~may~ not be the PIP package yet!
 # See https://github.com/PFython/log2d
 
-__VER__ = 'udp_listener v0.3' # Version string
+__VER__ = 'udp_listener v0.4' # Version string
 
 # ############################ CONSTANTS ########################
+BUFSIZE = 4096  # Socket buffer size
 LOGBASE = Path(os.environ['HOME'], '.logs')   # Base folder for logs
 UDP_SRC = ('<broadcast>', 6666)   # UDP listener address:port
 SECRET = "M15ecret"   # key for encryption
@@ -95,15 +98,15 @@ def udp_listener(queue, secret):
     then put on the receive queue for future processing.
     """
     # Create a UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.bind(UDP_SRC)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(UDP_SRC)
 
-    while True:
-        # Receive data from the socket
-        data, address = sock.recvfrom(4096)
-        queue.put((data, address))   # put raw message on Q
+        while True:
+            # Receive data from the socket
+            data, address = sock.recvfrom(BUFSIZE)
+            queue.put((data, address))   # put raw message on Q
 
 def message_handler(queue, response_queue):
     """Handle messages.  Read message from the receive queue passes it to
@@ -125,7 +128,8 @@ def get_logger(log_name):
         logger = logging.getLogger(log_name)
         logger.setLevel(logging.DEBUG)
         # create a rotating file handler
-        handler = logging.handlers.RotatingFileHandler(f"{log_name}.log", maxBytes=LOGSIZE, backupCount=5)
+        handler = logging.handlers.RotatingFileHandler(f"{log_name}.log",
+                                                        maxBytes=LOGSIZE, backupCount=5)
         handler.setLevel(logging.DEBUG)
         # add the handlers to the logger
         logger.addHandler(handler)
@@ -155,7 +159,7 @@ def handle_message(encrypted_msg, address, response_queue):
         log_record = logging.makeLogRecord(msg)
         # Check level we need exists and add if needed
         if not msg["levelname"] in logging._nameToLevel:
-            logging.addLevelName(msg['levelno'], msg['levelname'])
+            logging.addLevelName(msg['levelno'], msg['levelname'] )
         # and send to log
         logger.handle(log_record)
         if msg['levelno'] >= 50:   # This is critical or above
@@ -196,13 +200,20 @@ def handle_message(encrypted_msg, address, response_queue):
 def response_sender(response_queue):
     """Sends data (str, list, tuple, number) to addr through sock via UDP"""
     # Create a UDP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        while True:
+            # Get the response from the queue
+            response, address = response_queue.get()
+            response_bytes = json_encode(response, SECRET)
+            # break the data into chunks
+            chunks = [response_bytes[i:i+BUFSIZE] for i in range(0, len(response_bytes), BUFSIZE)]
+            # send the total length of the data as a 4-byte unsigned integer
+            total_length = len(response_bytes)
+            sock.sendto(struct.pack('>L', total_length), address)
 
-    while True:
-        # Get the response from the queue
-        response, address = response_queue.get()
-        response_bytes = json_encode(response, SECRET)
-        sock.sendto(response_bytes, address)
+            # send each chunk separately
+            for chunk in chunks:
+                sock.sendto(chunk, address)
 
 # ################################# MAIN #########################
 
@@ -222,7 +233,7 @@ if __name__ == '__main__':
     handler_thread.start()
 
     # Start the response sender thread
-    sender_thread = threading.Thread(target=response_sender, args=(response_queue,))
+    sender_thread = threading.Thread(target=response_sender, args=(response_queue))
     sender_thread.start()
 
     """
