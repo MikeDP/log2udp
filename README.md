@@ -9,7 +9,7 @@
 
 `log2udp` extends this by adding a simple UDP datagram handler to `log2d` that allows log messages to be sent to a remote logger thus providing a simple centralised logging system. It also simplifies adding *'extra'* static and dynamic attributes to log messages and dispatching the messages themselves.
 
-The UDP handler produces a log message as a `logging.logRecord` dict, using JSON rather than pickle to encode the dict into a UDP packet. The raw JSON UDP packet is converted to an autenticated and encrypted string using the lightwieght [ASCON 1.2](https://github.com/meichlseder/pyascon) protocol and transmitted to the remote listener.
+The UDP handler produces a log message as a `logging.logRecord` dict, using JSON rather than pickle, to encode the dict into a UDP packet. The raw JSON UDP packet is converted to an authenticated and encrypted string using the lightwieght [ASCON 1.2](https://github.com/meichlseder/pyascon) protocol and transmitted to the remote listener.
 
 `logRecord` attributes can be modified from the initialisation kwargs. One (fixed) attribute is *hostapp* which defaults to "your_machine_name:your_app_name" if not explicitly specified.  It's possible to add *extra* attributes to the `logRecord` in a simple way via the "extras=_dict_" keyword argument, where _dict_ is a normal Python dictionary of key:value pairs.  See examples below.
 
