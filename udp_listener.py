@@ -18,16 +18,15 @@ from datetime import datetime
 from pathlib import Path
 from queue import Queue
 
-from ascon import ascon
+import ascon  # Ver >=0.0.9
 from dateutil import parser
 
-from MDPLibrary.log2d.log2d import Log, logging
-#from log2d import Log, logging
-# NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find'
+from log2d import Log, logging
+# NOTE: YOU NEED A VERSION OF LOG2D THAT INCLUDES 'find' [V>=0.0.18]
 # and this ~may~ not be the PIP package yet!
 # See https://github.com/PFython/log2d
 
-__VER__ = 'udp_listener v0.4' # Version string
+__VER__ = 'udp_listener v0.41' # Version string
 
 # ############################ CONSTANTS ########################
 BUFSIZE = 4096  # Socket buffer size
@@ -66,9 +65,9 @@ def asc_encrypt(plaintext:str, key:str) -> str:
     #Convert plaintext to byte
     plaintext_bytes = plaintext.encode('utf-8')
     # Generate a random 16 byte nonce
-    nonce = ascon.get_random_bytes(16)
+    nonce = bytes(os.urandom(16))
     # Encrypt plaintext with key and nonce
-    ciphertext = ascon.ascon_encrypt(_key, nonce, b"", plaintext_bytes)
+    ciphertext = ascon.encrypt(_key, nonce, b"", plaintext_bytes)
     # Append the nonce to the ciphertext
     encrypted_message = nonce + ciphertext
     # Convert encrypted message bytes to string of hex
@@ -87,7 +86,7 @@ def asc_decrypt(encrypted_message_hex:str, key:str) -> str:
     ciphertext = encrypted_message[16:]
     # Decrypt ciphertext with key and nonce
     try:
-        plaintext_bytes = ascon.ascon_decrypt(_key, nonce, b"", ciphertext)
+        plaintext_bytes = ascon.decrypt(_key, nonce, b"", ciphertext)
     except ValueError:
         raise ValueError("Decryption failed - message has been tampered with")
     # Convert plaintext bytes to string
