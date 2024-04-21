@@ -12,9 +12,11 @@ v0.2  MDP  09/01/23  Happy Birthday
 v0.3  MDP  28/02/23  ASCON authenticated encryption
 v0.4  MDP  04/03/23  Simplified/enhanced 'extra' attributes
 v0.41 MDP  16/03/23  UDP receive now chunked
+v0.42 MDP  21/04/24  Latest version of ascon
 """
 
 import hashlib
+import os
 import json
 import socket
 import struct
@@ -24,13 +26,12 @@ from functools import wraps
 from logging.handlers import DatagramHandler, SocketHandler
 from pathlib import Path
 
-from ascon import ascon  # ASCON Encryption
+import ascon  # ASCON Encryption V>=0.0.9
 
-#from log2d import Log, logging
-from MDPLibrary.log2d.log2d import Log, logging
+from log2d import Log, logging    # MUST BE log2d v>=0.0.18 including 'find'
 
 # ################################# GLOBALS #####################
-__VER__ = "v0.41 beta"
+__VER__ = "v0.42 beta"
 VER_CMD = {"command": "VER", "name": 'apps'}
 BUFSIZE = 4096
 
@@ -78,9 +79,9 @@ def asc_encrypt(plaintext:str, key:str) -> str:
     #Convert plaintext to byte
     plaintext_bytes = plaintext.encode('utf-8')
     # Generate a random 16 byte nonce
-    nonce = ascon.get_random_bytes(16)
+    nonce = bytes(os.urandom(16))
     # Encrypt plaintext with key and nonce
-    ciphertext = ascon.ascon_encrypt(_key, nonce, b"", plaintext_bytes)
+    ciphertext = ascon.encrypt(_key, nonce, b"", plaintext_bytes)
     # Append the nonce to the ciphertext
     encrypted_message = nonce + ciphertext
     # Convert encrypted message bytes to string of hex
@@ -101,7 +102,7 @@ def asc_decrypt(encrypted_message_hex:str, key:str) -> str:
     ciphertext = encrypted_message[16:]
     # Decrypt ciphertext with key and nonce
     try:
-        plaintext_bytes = ascon.ascon_decrypt(_key, nonce, b"", ciphertext)
+        plaintext_bytes = ascon.decrypt(_key, nonce, b"", ciphertext)
     except ValueError:
         raise ValueError("Decryption failed - message has been tampered with")
     # Convert plaintext bytes to string
